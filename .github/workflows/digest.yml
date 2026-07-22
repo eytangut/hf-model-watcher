@@ -1,0 +1,61 @@
+name: Half-Weekly Digest
+
+on:
+  schedule:
+    - cron: '0 0 */3 * *'  # Runs every 3 days
+  workflow_dispatch:        # Allows manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+    
+      - id: shabbat
+        name: Check if Shabbat
+        run: |
+         FORBIDDEN=$(curl -s --max-time 30 --retry 3 \
+            "https://www.hebcal.com/zmanim?cfg=json&im=1&geonameid=${HEBCAL_GEONAMEID:-5128581}" | \
+            python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if d.get("issurMelacha") else "false")')
+          echo "forbidden=$FORBIDDEN" >> "$GITHUB_OUTPUT"
+          echo "Melacha: ${FORBIDDEN}"
+        env:
+          HEBCAL_GEONAMEID: 281184
+    
+      - name: Checkout repository
+        if: steps.shabbat.outputs.forbidden == 'false'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.shabbat.outputs.forbidden == 'false'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        if: steps.shabbat.outputs.forbidden == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Digest Script
+        if: steps.shabbat.outputs.forbidden == 'false'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DIGEST_TO_EMAIL: ${{ secrets.DIGEST_TO_EMAIL }}
+        run: python -m src.digest_main
+
+      - name: Commit and push changes
+        if: steps.shabbat.outputs.forbidden == 'false'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add state/
+          git commit -m "chore: clear pending digest [skip ci]" || echo "No changes to commit"
+          git push
