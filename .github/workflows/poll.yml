@@ -1,0 +1,54 @@
+name: Daily Polling
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Runs daily at midnight
+  workflow_dispatch:      # Allows manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - id: shabbat
+        name: Check if it is Shabbat
+        run: |
+         FORBIDDEN=$(curl -s --max-time 30 --retry 3 \
+            "https://www.hebcal.com/zmanim?cfg=json&im=1&geonameid=${HEBCAL_GEONAMEID:-5128581}" | \
+            python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if d.get("issurMelacha") else "false")')
+          echo "forbidden=$FORBIDDEN" >> "$GITHUB_OUTPUT"
+          echo "Melacha: ${FORBIDDEN}"
+        env:
+          HEBCAL_GEONAMEID: "281184"
+      - name: Checkout repository
+        if: steps.shabbat.outputs.forbidden == 'false'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.shabbat.outputs.forbidden == 'false'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        if: steps.shabbat.outputs.forbidden == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Polling Script
+        if: steps.shabbat.outputs.forbidden == 'false'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -m src.poll_main
+
+      - name: Commit and push changes
+        if: steps.shabbat.outputs.forbidden == 'false'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git commit -m "chore: update seen models and dashboard [skip ci]" || echo "No changes to commit"
+          git push
